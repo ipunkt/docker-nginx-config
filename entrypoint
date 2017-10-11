@@ -1,15 +1,5 @@
 #!/bin/sh
 
-INITLOCK="/var/init.lock"
-APPPATH="/var/www/app"
-
-if [ -z "$INITSCRIPT" ] ; then
-	INITSCRIPT="$APPPATH/init.sh"
-fi
-if [ -z "$STARTSCRIPT" ] ; then
-	STARTSCRIPT="$APPPATH/start.sh"
-fi
-
 USER="www-data"
 if [ ! -z "$USER_ID" -a ! -z "$GROUP_ID" ] ; then
 	echo "Switching to user"
@@ -29,157 +19,27 @@ echo CLIENT_MAX_BODY_SIZE=$CLIENT_MAX_BODY_SIZE
 export GZIP=${GZIP:-on}
 echo GZIP=$GZIP
 
+export SERVER_URL=${SERVER_URL:-localhost}
+echo "SERVER_URL=$SERVER_URL"
+
 LARAVEL_CONFIG=${LARAVEL_CONFIG:-yes}
 echo LARAVEL_CONFIG=$LARAVEL_CONFIG
 
-envsubst < /opt/nginx/nginx.conf > /etc/nginx/nginx.conf
+NGINX_CONF_SOURCE="/opt/nginx/nginx.conf"
+NGINX_CONF_TARGET="/etc/nginx/nginx.conf"
+echo "Creating '$NGINX_CONF_TARGET' from '$NGINX_CONF_SOURCE'"
+envsubst < ${NGINX_CONF_SOURCE}> ${NGINX_CONF_TARGET}
 
 if [ x"$LARAVEL_CONFIG" = x"yes" ] ; then
-	envsubst < /opt/nginx/conf.d/laravel.conf > /etc/nginx/conf.d/laravel.conf
+	LARAVEL_CONFIG_SOURCE="/opt/nginx/conf.d/laravel.conf"
+	LARAVEL_CONFIG_TARGET="/etc/nginx/conf.d/laravel.conf"
+	echo "Creating laravel config '${LARAVEL_CONFIG_TARGET}' from ${LARAVEL_CONFIG_SOURCE}"
+	envsubst < "${LARAVEL_CONFIG_SOURCE}" > "${LARAVEL_CONFIG_TARGET}"
 fi
 
 for FILE in fastcgi_params koi-utf koi-win mime.types nginx.conf scgi_params uwsgi_params win-utf ; do
 	envsubst < /opt/nginx/$FILE > /etc/nginx/$FILE
 done
 
-###############################################################################
-# ensure the storage is writable by changing its user to the one running nginx
-# and php-fpm
-#
-# Environment: STORAGE_REOWN_MODE decides how this is done
-# - default / empty: Start the changing process int he foreground
-# - background: Start the changing process in the background
-# - none: Do nont change the ownership of the storage
-###############################################################################
-own_storage() {
-	echo Started reowning storage
-	for STORAGE in "${APPPATH}/storage" "${APPPATH}/app/storage" \
-		"${APPPATH}/bootstrap/cache" ; do
-	if [ -d $STORAGE ] ; then
-		echo Making $STORAGE writable
-		#chmod -R 777 $STORAGE
-		chown -R $USER.$USER $STORAGE
-	else
-		echo Storage $STORAGE not found
-	fi
-done
-echo Finished reowning storage
-}
-
-case "$STORAGE_REOWN_MODE" in
-	background)
-		own_storage &
-		;;
-	none)
-		echo "Not reonwing storage."
-		;;
-	*)
-		own_storage
-		;;
-esac
-
-if [ x"$SERVER_URL" = x"" ] ; then
-	SERVER_URL=localhost
-fi
-
-if [ ! -z "$CACHE_DIRECTORY" ] ; then
-	if [ ! -d "$CACHE_DIRECTORY" ] ; then
-		echo "Creating Cache Directory"
-		mkdir -p "$CACHE_DIRECTORY"
-	fi
-	echo "Setting Ownership for Cache directory $CACHE_DIRECTORY"
-	chown -R $USER.$USER "$CACHE_DIRECTORY"
-	echo "Setting permissions for Cache directory $CACHE_DIRECTORY"
-	chmod -R 770 "$CACHE_DIRECTORY"
-fi
-
-echo Creating NGINX Configuration
-echo "Setting Server Url to $SERVER_URL"
-for FILEPATH in /etc/nginx/conf.template.d/*
-do FILENAME=$(basename $FILEPATH | sed -e 's/\.tpl//')
-sed \
-	-e 's/<SERVER_URL>/'$SERVER_URL'/g' \
-	-e 's/<CLIENT_MAX_BODY_SIZE>/'$NGINX_CLIENT_MAX_BODY_SIZE'/g' \
-		"$FILEPATH" > "/etc/nginx/conf.d/$FILENAME"
-done
-
-# Check MySQL Connection
-if [ "$DB_HOST" = "" -o "$DB_USERNAME" = "" -o "$DB_PASSWORD" = "" ]
-then
-	echo "DB_HOST, DB_USERNAME or DB_PASSWORD not set, continueing without waiting for database."
-	echo "Please set DB_HOST DB_USERNAME and DB_PASSWORD to enable database wait"
-else
-	echo "Waiting for Database connection on $DB_HOST"
-	mysql -h $DB_HOST -u $DB_USERNAME "--password=$DB_PASSWORD" -e exit
-	while [ "$?" != "0" ]
-	do echo "Waiting 5s until next try to"
-		sleep 5s
-		mysql -h $DB_HOST -u $DB_USERNAME "--password=$DB_PASSWORD" -e exit
-	done
-fi
-
-# This command causes the script to fail if any command exits with a status != 0
-# In effect if any command fails then the container will stop - a visual
-# indication that something has gone wrong
-set -e
-
-ARTISAN="${APPPATH}/artisan "
-
-if [ -f $ARTISAN ] ; then
-	echo Taking Application into maintenance mode
-	php $ARTISAN down
-else
-	echo "Artisan not found at $ARTISAN: skipping maintenance mode"
-fi
-
-# Do not start fpm if NO_FPM was set
-# This is used when the user wants to provide a different fpm version and mount
-# the socket to /var/run/php/php-fpm.sock via volumes_from
-if [ -z "$NO_FPM" ] ; then
-	echo Starting PHP7 fpm
-	/etc/init.d/php7.0-fpm start
-fi
-
-#
-# Run INITSCRIPT if the file $INITLOCK does not exist yet.
-# - Then create $INITLOCK
-# -> Should only be run once per container.
-#
-if [ ! -f "$INITLOCK" ] ; then
-
-	if [ -f "$INITSCRIPT" ] ; then
-		$INITSCRIPT
-	fi
-
-	echo "The existance of this files prevents the INITSCRIPT to be run." > "$INITLOCK"
-fi
-
-if [ -f "$STARTSCRIPT" ] ; then
-	$STARTSCRIPT
-fi
-
-echo Starting NGINX
-nginx -g "daemon off;" &
-
-if [ -f $ARTISAN ] ; then
-	if [ -z "$NO_MIGRATE" ] ; then
-		echo Migrating
-		php ${APPPATH}/artisan migrate --no-interaction --force
-	fi
-
-	if [ -z "$NO_SEED" ] ; then
-		echo Seeding
-		php ${APPPATH}/artisan db:seed --no-interaction --force
-	fi
-
-	echo Taking Application out of maintenance mode
-	php ${APPPATH}/artisan up
-else
-	echo "Artisan not found at $ARTISAN: skipping migrate and seed"
-fi
-
-
-echo "Entering main-wait for the webserver"
-wait
-
-echo "Webserver has stopped"
+echo "Running $@"
+$@

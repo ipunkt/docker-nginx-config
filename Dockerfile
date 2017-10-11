@@ -5,3 +5,4 @@ VOLUME /etc/nginx
 COPY /etc/nginx /opt/nginx/
 
 ADD entrypoint /entrypoint
+ENTRYPOINT /entrypoint
