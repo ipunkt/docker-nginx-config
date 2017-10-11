@@ -10,6 +10,10 @@ if [ ! -z "$USER_ID" -a ! -z "$GROUP_ID" ] ; then
 	adduser --disabled-password --disabled-login --no-create-home --system --uid "$USER_ID" --gid "$GROUP_ID" "$USER"
 fi
 
+
+# needed to 'escape' a dollar sign in a file going through envsubst
+export DOLLAR='$'
+
 export USER
 echo USER=$USER
 
@@ -37,8 +41,18 @@ if [ x"$LARAVEL_CONFIG" = x"yes" ] ; then
 	envsubst < "${LARAVEL_CONFIG_SOURCE}" > "${LARAVEL_CONFIG_TARGET}"
 fi
 
-for FILE in fastcgi_params koi-utf koi-win mime.types nginx.conf scgi_params uwsgi_params win-utf ; do
-	envsubst < /opt/nginx/$FILE > /etc/nginx/$FILE
+for FILE in fastcgi_params koi-utf koi-win mime.types scgi_params uwsgi_params win-utf ; do
+	SOURCE="/opt/nginx/$FILE"
+	TARGET="/etc/nginx/$FILE"
+	echo "Creating '$TARGET' from '$SOURCE'"
+	cp -v "${SOURCE}" "${TARGET}"
+done
+
+for DIRECTORY in include ; do
+	SOURCE="/opt/nginx/${DIRECTORY}"
+	TARGET="/etc/nginx/"
+	echo "Creating '$TARGET$DIRECTORY' from '$SOURCE'"
+	cp -R "$SOURCE" "$TARGET"
 done
 
 echo "Running $@"
